@@ -1,0 +1,13 @@
+../Core/Inc/sensors/icm42688.c:32:26:icm_probe	5
+../Core/Inc/sensors/icm42688.c:56:26:icm_init	2
+../Core/Inc/sensors/icm42688.c:63:26:icm_read	3
+../Core/Inc/sensors/icm42688.c:73:26:icm_whoami	2
+../Core/Inc/sensors/icm42688.c:88:6:icm42688_bind	1
+../Core/Inc/sensors/icm42688.c:98:26:ICM_POWER_mgmt0_config	8
+../Core/Inc/sensors/icm42688.c:143:26:icm_read_temp_raw	3
+../Core/Inc/sensors/icm42688.c:157:26:icm_read_temp_c	2
+../Core/Inc/sensors/icm42688.c:166:26:icm_read_gyro_raw	3
+../Core/Inc/sensors/icm42688.c:192:26:rd	1
+../Core/Inc/sensors/icm42688.c:196:26:wr1	1
+../Core/Inc/sensors/icm42688.c:200:23:icm_clip2	1
+../Core/Inc/sensors/icm42688.c:205:20:getSelfStatePointer	3

@@ -1,0 +1,7 @@
+../Core/Inc/sensors/gps6m.c:16:26:rx1	1
+../Core/Inc/sensors/gps6m.c:21:26:nmea_probe_stream	11
+../Core/Inc/sensors/gps6m.c:37:26:gps_probe	1
+../Core/Inc/sensors/gps6m.c:42:26:gps_init	1
+../Core/Inc/sensors/gps6m.c:47:26:gps_read	1
+../Core/Inc/sensors/gps6m.c:52:26:gps_whoami	3
+../Core/Inc/sensors/gps6m.c:67:6:gps6m_bind	1

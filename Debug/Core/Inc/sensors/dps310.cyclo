@@ -1,0 +1,6 @@
+../Core/Inc/sensors/dps310.c:12:26:rd	1
+../Core/Inc/sensors/dps310.c:19:26:dps_probe	2
+../Core/Inc/sensors/dps310.c:27:26:dps_init	1
+../Core/Inc/sensors/dps310.c:33:26:dps_read	1
+../Core/Inc/sensors/dps310.c:39:26:dps_whoami	1
+../Core/Inc/sensors/dps310.c:53:6:dps310_bind	1
