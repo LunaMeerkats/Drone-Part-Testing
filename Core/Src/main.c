@@ -140,7 +140,7 @@ int main(void)
 	// I2C_Scan(&hi2c2);
 
 	// Bind drivers to their buses/addresses (adjust to your wiring)
-	dps310_bind(&if_dps, &dps, &hi2c2, DPS310_ADDR_A);  // 0x77 by default, 0x76 if SDO low
+	dps310_bind(&if_dps, &dps, &hi2c2, DPS_I2C_ADDRESS);  // 0x77 by default, 0x76 if SDO low
 	icm42688_bind(&if_icm, &icm, &hi2c1, ICM_ADDR_7B);  // 0x68 or 0x69 depending on AD0
 	gps6m_bind(&if_gps, &gps, &huart6);
 
@@ -166,10 +166,15 @@ int main(void)
 	//	HAL_GPIO_WritePin(Green_LED_GPIO_Port, Green_LED_Pin, GPIO_PIN_RESET);
 
 	// Init devices (config, coeffs, etc. — your driver stubs can be expanded later)
+	HAL_StatusTypeDef response;
+	response = if_icm.vTable->init(&if_icm);
+	if (response != HAL_OK) while(1);
 
-	if_icm.vTable->init(&if_icm);
-	if_dps.vTable->init(&if_dps);
-	if_gps.vTable->init(&if_gps);
+	response =if_dps.vTable->init(&if_dps);
+	if (response != HAL_OK) while(1);
+
+	response =if_gps.vTable->init(&if_gps);
+	if (response != HAL_OK) while(1);
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
