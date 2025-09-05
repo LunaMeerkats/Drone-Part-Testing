@@ -21,6 +21,10 @@ extern "C" {
 #define ICM_WHO_AM_I_REG_SIZE 8u
 #define ICM_WHO_AM_I_DEFAULT 0x47
 
+#define ICM_SOFT_RESET_REG 0x11
+#define ICM_SOFT_RESET_POS 0
+#define ICM_SOFT_RESET_Msk (1u << ICM_SOFT_RESET_POS)
+
 
 #define ICM_POWER_MGMT0_REG 0x4E
 
@@ -54,7 +58,7 @@ extern "C" {
 #define ICM_GYRO_CONFIG0_REG 0x4F
 
 #define ICM_GYRO_CONFIG0_ODR_POS 0u
-#define ICM_GYRO_CONFIG0_ODR_Msk (15u << ICM_GYRO_CONFIG_ODR_POS)
+#define ICM_GYRO_CONFIG0_ODR_Msk (15u << ICM_GYRO_CONFIG0_ODR_POS)
 
 #define ICM_GYRO_CONFIG0_FS_POS 5u
 #define ICM_GYRO_CONFIG0_FS_Msk (7u << ICM_GYRO_CONFIG0_FS_POS)
@@ -62,9 +66,15 @@ extern "C" {
 #define ICM_GYRO_CONFIG0_WRITABLE_Msk (ICM_GYRO_CONFIG0_ODR_Msk | ICM_GYRO_CONFIG0_FS_Msk)
 
 
-#define ICM_SOFT_RESET_REG 0x11
-#define ICM_SOFT_RESET_POS 0u
-#define ICM_SOFT_RESET_Msk (1u << ICM_SOFT_RESET_POS)
+#define ICM_ACCEL_CONFIG0_REG 0x50
+
+#define ICM_ACCEL_CONFIG0_ODR_POS 0u
+#define ICM_ACCEL_CONFIG0_ODR_Msk (15u << ICM_ACCEL_CONFIG0_ODR_POS)
+
+#define ICM_ACCEL_CONFIG0_FS_POS 5u
+#define ICM_ACCEL_CONFIG0_FS_Msk (7u << ICM_ACCEL_CONFIG0_FS_POS)
+
+#define ICM_ACCEL_CONFIG0_WRITABLE_Msk (ICM_ACCEL_CONFIG0_ODR_Msk | ICM_ACCEL_CONFIG0_FS_Msk)
 
 
 #define ICM_TEMP_MSB                    0x1D
@@ -132,8 +142,12 @@ typedef struct {
 	float      gyro_dps[3];   // deg/s
 
 	// scaling (set these in init based on FS config)
-	float      accel_lsb_per_g;     // e.g., 2048.0f for ±16g
-	float      gyro_lsb_per_dps;    // e.g., 16.4f for 2000 dps
+	float      accel_lsb_per_g;
+	float      gyro_lsb_per_dps;
+
+	// data rate
+	float 	   gyro_odr;
+	float 	   accel_odr;
 } icm42688_t;
 
 

@@ -181,7 +181,13 @@ int main(void)
 		if_icm.vTable->read(&if_icm);
 		if_gps.vTable->read(&if_gps);
 
-	    printf("ICM temp: %.2f C\r\n", icm.last_temp_c);
+		printf("ICM temp: %.2f C\r\n", icm.last_temp_c);
+		printf("ICM X Accel (g): %.2f\r\n", (double)icm.accel_g[0]);
+		printf("ICM Y Accel (g): %.2f\r\n", (double)icm.accel_g[1]);
+		printf("ICM Z Accel (g): %.2f\r\n", (double)icm.accel_g[2]);
+		printf("ICM X Rotation (dps): %.2f\r\n", (double)icm.gyro_dps[0]);
+		printf("ICM Y Rotation (dps): %.2f\r\n", (double)icm.gyro_dps[1]);
+		printf("ICM Z Rotation (dps): %.2f\r\n", (double)icm.gyro_dps[2]);
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
