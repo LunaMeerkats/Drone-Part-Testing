@@ -72,6 +72,8 @@ static HAL_StatusTypeDef icm_init(sensor_if_t *self) {
 	icm42688_t *s = getSelfStatePointer(self);
 	if (!s) return HAL_ERROR;
 
+	//TODO: Configure sensor filters, etc.
+
 	HAL_StatusTypeDef response;
 
 	response = icm_soft_reset(s);
