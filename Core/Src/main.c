@@ -193,6 +193,10 @@ int main(void)
 		printf("ICM X Rotation (dps): %.2f\r\n", (double)icm.gyro_dps[0]);
 		printf("ICM Y Rotation (dps): %.2f\r\n", (double)icm.gyro_dps[1]);
 		printf("ICM Z Rotation (dps): %.2f\r\n", (double)icm.gyro_dps[2]);
+
+		printf("DPS Pressure: %.2f\r\n", (double)dps.pressure);
+		printf("DPS Temperature: %.2f\r\n", (double)dps.temperature);
+		printf("DPS Altitude: %.2f\r\n", (double)dps.altitude);
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */

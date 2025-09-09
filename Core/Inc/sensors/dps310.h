@@ -93,6 +93,28 @@ extern "C" {
 #define DPS_COEF_BLOCK_LEN               (DPS_COEF_BLOCK_END - DPS_COEF_BLOCK_START + 1)
 
 
+#define DPS_CFG_REG                0x09
+#define DPS_CFG_SPI_MODE_Pos       0u
+#define DPS_CFG_FIFO_EN_Pos        1u
+#define DPS_CFG_P_SHIFT_Pos        2u
+#define DPS_CFG_T_SHIFT_Pos        3u
+#define DPS_CFG_INT_PRS_Pos        4u
+#define DPS_CFG_INT_TMP_Pos        5u
+#define DPS_CFG_INT_FIFO_Pos       6u
+#define DPS_CFG_INT_HL_Pos         7u
+
+#define DPS_CFG_SPI_MODE_Msk       (1u << DPS_CFG_SPI_MODE_Pos)
+#define DPS_CFG_FIFO_EN_Msk        (1u << DPS_CFG_FIFO_EN_Pos)
+#define DPS_CFG_P_SHIFT_Msk        (1u << DPS_CFG_P_SHIFT_Pos)
+#define DPS_CFG_T_SHIFT_Msk        (1u << DPS_CFG_T_SHIFT_Pos)
+#define DPS_CFG_INT_PRS_Msk        (1u << DPS_CFG_INT_PRS_Pos)
+#define DPS_CFG_INT_TMP_Msk        (1u << DPS_CFG_INT_TMP_Pos)
+#define DPS_CFG_INT_FIFO_Msk       (1u << DPS_CFG_INT_FIFO_Pos)
+#define DPS_CFG_INT_HL_Msk         (1u << DPS_CFG_INT_HL_Pos)
+
+/* Helper: OSR codes 0..3 = ≤8×, 4..7 = >8× (needs right-shift in data regs) */
+#define DPS_OSR_NEEDS_SHIFT(osr_code)   (((osr_code) & 0x0Fu) >= 4u)
+
 
 #define DPS_PRESSURE_CONFIGURATION_Reg 0x06
 #define DPS_PRESSURE_CONFIGURATION_POR_Pos 0u
@@ -179,6 +201,7 @@ typedef struct {
 	float temperature_raw;
 	float pressure;
 	float temperature;
+	float altitude;
 
 } dps310_t;
 

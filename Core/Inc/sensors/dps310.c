@@ -4,6 +4,7 @@
  */
 
 #include "dps310.h"
+#include <math.h>
 
 // Sensor functions
 static HAL_StatusTypeDef dps_probe(sensor_if_t *self);
@@ -17,14 +18,14 @@ static HAL_StatusTypeDef dsp_pressure_configuration(dps310_t *self, uint8_t pres
 static HAL_StatusTypeDef dsp_temperature_configuration(dps310_t *self, uint8_t temperature_measurement_sensor, uint8_t temperate_measurement_rate, uint8_t temperature_oversampling_rate);
 static HAL_StatusTypeDef dsp_status_configuration(dps310_t *self, uint8_t meas_ctrl);
 static HAL_StatusTypeDef dsp_soft_reset(dps310_t *self);
+static HAL_StatusTypeDef dsp_fifo_config(dps310_t *self);
 static HAL_StatusTypeDef dsp_read_coefficients(dps310_t *self);
-static HAL_StatusTypeDef dsp_compensate_all(dps310_t *self);
 
 //Read Values
 static HAL_StatusTypeDef dsp_read_pressure_raw(dps310_t *self);
-static HAL_StatusTypeDef dsp_read_pressure(dps310_t *self);
 static HAL_StatusTypeDef dsp_read_temperature_raw(dps310_t *self);
-static HAL_StatusTypeDef dsp_read_temperature(dps310_t *self);
+static HAL_StatusTypeDef dsp_compensate_all(dps310_t *self);
+static HAL_StatusTypeDef dps_pressure_to_altitude(dps310_t *self);
 
 // Helpers
 static inline uint8_t clip2(uint8_t x);
@@ -84,6 +85,15 @@ static HAL_StatusTypeDef dps_init(sensor_if_t *self)
 	}
 
 	HAL_Delay(500);
+
+	response = dsp_fifo_config(s);
+	if(response != HAL_OK){
+		s->last_err = DPS_ERR_NOT_INITIALIZED;
+		return HAL_ERROR;
+	}
+
+	HAL_Delay(500);
+
 	response = dsp_status_configuration(s, 7);
 	if(response != HAL_OK){
 		s->last_err = DPS_ERR_NOT_INITIALIZED;
@@ -99,20 +109,6 @@ static HAL_StatusTypeDef dps_init(sensor_if_t *self)
 	}
 
 	HAL_Delay(500);
-
-	// read latest raw values
-	response = dsp_read_temperature_raw(s);
-	if (response != HAL_OK)
-		return response;
-
-	response = dsp_read_pressure_raw(s);
-	if (response != HAL_OK)
-		return response;
-
-	// compensate to engineering units
-	response = dsp_compensate_all(s);
-	if (response != HAL_OK)
-		return response;
 
 	s->last_err = DPS_OK;
 	return HAL_OK;
@@ -148,6 +144,14 @@ static HAL_StatusTypeDef dps_read(sensor_if_t *self)
 		return HAL_ERROR;
 	}
 
+	response = dps_pressure_to_altitude(s);
+	if(response != HAL_OK){
+		s->last_err = DPS_ERR_NOT_INITIALIZED;
+		return HAL_ERROR;
+	}
+
+	s->last_err = DPS_OK;
+	return HAL_OK;
 }
 
 static HAL_StatusTypeDef dps_whoami(sensor_if_t *self, uint8_t *out)
@@ -257,6 +261,50 @@ static HAL_StatusTypeDef dsp_temperature_configuration(dps310_t *self, uint8_t t
 	self->last_err = DPS_OK;
 	return HAL_OK;
 }
+
+static HAL_StatusTypeDef dsp_fifo_config(dps310_t *self)
+{
+	if (!self) return HAL_ERROR;
+
+	HAL_StatusTypeDef st;
+	uint8_t pv = 0, tv = 0, cfg = 0;
+
+	/* Read pressure & temperature config to get OSR codes */
+	st = HAL_I2C_Mem_Read(self->i2c, self->addr7 << 1,
+			DPS_PRESSURE_CONFIGURATION_Reg, I2C_MEMADD_SIZE_8BIT,
+			&pv, 1, 200);
+	if (st != HAL_OK) return st;
+
+	st = HAL_I2C_Mem_Read(self->i2c, self->addr7 << 1,
+			DPS_TEMPERATURE_CONFIGURATION_Reg, I2C_MEMADD_SIZE_8BIT,
+			&tv, 1, 200);
+	if (st != HAL_OK) return st;
+
+	/* Extract OSR codes */
+	uint8_t p_osr = (uint8_t)((pv & DPS_PRESSURE_CONFIGURATION_POR_Msk) >>
+			DPS_PRESSURE_CONFIGURATION_POR_Pos);
+	uint8_t t_osr = (uint8_t)((tv & DPS_TEMPERATURE_CONFIGURATION_TOS_Msk) >>
+			DPS_TEMPERATURE_CONFIGURATION_TOS_Pos);
+
+	/* Read current CFG_REG */
+	st = HAL_I2C_Mem_Read(self->i2c, self->addr7 << 1,
+			DPS_CFG_REG, I2C_MEMADD_SIZE_8BIT,
+			&cfg, 1, 200);
+	if (st != HAL_OK) return st;
+
+	/* Compute new CFG: toggle only T_SHIFT/P_SHIFT based on OSR */
+	uint8_t nv = (uint8_t)(cfg & ~(DPS_CFG_P_SHIFT_Msk | DPS_CFG_T_SHIFT_Msk));
+
+	if (DPS_OSR_NEEDS_SHIFT(p_osr)) nv |= DPS_CFG_P_SHIFT_Msk;
+	if (DPS_OSR_NEEDS_SHIFT(t_osr)) nv |= DPS_CFG_T_SHIFT_Msk;
+
+	if (nv == cfg) return HAL_OK;  /* nothing to do */
+
+	return HAL_I2C_Mem_Write(self->i2c, self->addr7 << 1,
+			DPS_CFG_REG, I2C_MEMADD_SIZE_8BIT,
+			&nv, 1, 200);
+}
+
 
 static HAL_StatusTypeDef dsp_status_configuration(dps310_t *self, uint8_t meas_ctrl){
 	if (!self) return HAL_ERROR;
@@ -372,11 +420,24 @@ static HAL_StatusTypeDef dsp_compensate_all(dps310_t *self)
 	const float P_lin =
 			(float)self->c00
 			+ P_sc * ((float)self->c10 + P_sc * ((float)self->c20 + P_sc * (float)self->c30))
-			+ T_sc * ((float)self->c01 + P_sc * ((float)self->c11 + P_sc * (float)self->c21));
+			+ T_sc * (float)self->c01 + T_sc * P_sc * ((float)self->c11+P_sc*(float)self->c21);
 
 	self->pressure = P_lin;
 
 	self->last_err = DPS_OK;
+	return HAL_OK;
+}
+
+// International Standard Atmosphere barometric formula.
+// pressure_pa = measured static pressure in Pa.
+// p0_pa       = sea-level reference pressure in Pa (use local QNH if you have it).
+static HAL_StatusTypeDef dps_pressure_to_altitude(dps310_t *self)
+{
+	if (self->pressure <= 0.0f) return 0.0f;
+	// Exponent 1/5.255 ≈ 0.190295
+	float ratio = self->pressure / 101325;
+	self->altitude = 44330.0f * (1.0f - powf(ratio, 0.190295f));
+
 	return HAL_OK;
 }
 
