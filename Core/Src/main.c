@@ -74,6 +74,167 @@ void I2C_Scan(I2C_HandleTypeDef *hi2c);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+typedef struct {
+	float x;          // altitude (m)
+	float v;          // vertical speed (m/s)
+	float P00, P01, P10, P11;  // covariance
+} AltKF;
+
+static void altkf_init(AltKF *kf, float x0) {
+	kf->x = x0; kf->v = 0.0f;
+	kf->P00 = 10.0f; kf->P01 = 0.0f;
+	kf->P10 = 0.0f;  kf->P11 = 10.0f;
+}
+
+static void altkf_predict(AltKF *kf, float dt, float Q_pos, float Q_vel) {
+	// x = x + v*dt
+	kf->x += kf->v * dt;
+	// v = v
+	// P = F P F' + Q, F = [[1 dt],[0 1]]
+	float P00 = kf->P00 + dt*(kf->P10 + kf->P01) + dt*dt*kf->P11 + Q_pos;
+	float P01 = kf->P01 + dt*kf->P11;
+	float P10 = kf->P10 + dt*kf->P11;
+	float P11 = kf->P11 + Q_vel;
+	kf->P00=P00; kf->P01=P01; kf->P10=P10; kf->P11=P11;
+}
+
+static void altkf_update_scalar(AltKF *kf, float z, float R) {
+	// H = [1 0]
+	float y  = z - kf->x;
+	float S  = kf->P00 + R;
+	float K0 = kf->P00 / S;
+	float K1 = kf->P10 / S;
+	kf->x += K0 * y;
+	kf->v += K1 * y;
+	float P00 = (1.0f - K0) * kf->P00;
+	float P01 = (1.0f - K0) * kf->P01;
+	float P10 = kf->P10 - K1 * kf->P00;
+	float P11 = kf->P11 - K1 * kf->P01;
+	kf->P00=P00; kf->P01=P01; kf->P10=P10; kf->P11=P11;
+}
+
+/* Simple EMA smoother for GPS */
+typedef struct {
+	int    seeded;
+	double lat_deg_f;
+	double lon_deg_f;
+	float  spd_mps_f;
+	float  course_deg_f;
+} GpsEMA;
+
+static void gps_ema_reset(GpsEMA *f) { memset(f, 0, sizeof(*f)); }
+static void gps_ema_update(GpsEMA *f, const gps6m_t *g, float alpha_latlon, float alpha_spd) {
+	if (!f->seeded) {
+		f->lat_deg_f = g->lat_deg;
+		f->lon_deg_f = g->lon_deg;
+		f->spd_mps_f = g->speed_mps;
+		f->course_deg_f = g->course_deg;
+		f->seeded = 1;
+		return;
+	}
+	f->lat_deg_f = f->lat_deg_f + alpha_latlon * (g->lat_deg - f->lat_deg_f);
+	f->lon_deg_f = f->lon_deg_f + alpha_latlon * (g->lon_deg - f->lon_deg_f);
+	f->spd_mps_f = f->spd_mps_f + alpha_spd    * (g->speed_mps - f->spd_mps_f);
+	// course is meaningless at low speed, keep last when speed < 0.5 m/s
+	if (g->speed_mps > 0.5f) {
+		float e = g->course_deg - f->course_deg_f;
+		// wrap to [-180,180]
+		while (e > 180.0f) e -= 360.0f;
+		while (e < -180.0f) e += 360.0f;
+		f->course_deg_f += alpha_spd * e;
+		// wrap back to [0,360)
+		if (f->course_deg_f < 0.0f)  f->course_deg_f += 360.0f;
+		if (f->course_deg_f >= 360.0f) f->course_deg_f -= 360.0f;
+	}
+}
+
+/* Baro <-> QNH helper: compute sea-level pressure P0 from local P,z */
+static float baro_compute_P0(float P_pa, float alt_m) {
+	// Standard atmosphere: P = P0 * (1 - L*h/T0)^(g*M/R/L)
+	// Invert for P0. Constants for ISA:
+	const float T0 = 288.15f;     // K
+	const float L  = 0.0065f;     // K/m
+	const float g0 = 9.80665f;    // m/s^2
+	const float R  = 287.053f;    // J/(kg*K)
+	const float expn = g0/(R*L);  // ~5.25588
+	float ratio = 1.0f - (L*alt_m)/T0;
+	if (ratio <= 0.0f) ratio = 0.0001f;
+	float P0 = P_pa / powf(ratio, expn);
+	return P0;  // Pa
+}
+
+/* Keep global filter state */
+static AltKF  altkf;
+static GpsEMA gpsf;
+static uint8_t filters_seeded = 0;
+
+/* One-step function you asked for: reads sensors, updates filters, and prints */
+static void sensors_step(float dt_s,
+		float Q_pos, float Q_vel,
+		float R_baro, float R_gps,
+		float ema_latlon_alpha, float ema_spd_alpha,
+		float *alt_fused_out) {
+	// 1) Read all devices (non-blocking reads)
+	if_dps.vTable->read(&if_dps);
+	if_icm.vTable->read(&if_icm);
+
+	if (HAL_GetTick() - gps.last_update_ms > 150) {
+		uint32_t t_end = HAL_GetTick() + 60;         // ~60 ms budget
+		do {
+			if_gps.vTable->read(&if_gps);
+			if (HAL_GetTick() - gps.last_update_ms <= 50) break; // fresh enough
+		} while ((int32_t)(HAL_GetTick() - t_end) < 0);
+	} else {
+		// still give it a light read so we don't fall behind
+		if_gps.vTable->read(&if_gps);
+	}
+
+	// 2) Seed filters once we have a GPS fix
+	if (!filters_seeded && gps.has_fix) {
+		altkf_init(&altkf, gps.alt_m);  // start from GPS altitude
+		gps_ema_reset(&gpsf);
+		filters_seeded = 1;
+	}
+
+	// 3) Predict step for altitude KF
+	altkf_predict(&altkf, dt_s, Q_pos, Q_vel);
+
+	// 4) Baro absolute altitude, using your current DPS altitude.
+	// If your dps.altitude already uses a good P0, this is fine.
+	// Otherwise, compute dps.altitude yourself from pressure and a calibrated P0.
+	float z_baro = (float)dps.altitude;
+
+	// 5) Update with baro at high rate
+	altkf_update_scalar(&altkf, z_baro, R_baro);
+
+	// 6) If a fresh GPS fix is present, update with GPS altitude as absolute correction
+	if (gps.has_fix) {
+		altkf_update_scalar(&altkf, (float)gps.alt_m, R_gps);
+		gps_ema_update(&gpsf, &gps, ema_latlon_alpha, ema_spd_alpha);
+	}
+
+	if (alt_fused_out) *alt_fused_out = altkf.x;
+
+	// 7) Print once per call for visibility
+	printf("ICM temp: %.2f C\r\n", icm.last_temp_c);
+	printf("ICM Accel (g): [%.2f, %.2f, %.2f]\r\n", (double)icm.accel_g[0], (double)icm.accel_g[1], (double)icm.accel_g[2]);
+	printf("ICM Gyro  (dps): [%.2f, %.2f, %.2f]\r\n", (double)icm.gyro_dps[0], (double)icm.gyro_dps[1], (double)icm.gyro_dps[2]);
+
+	printf("DPS Pressure: %.2f Pa   Temp: %.2f C   Alt_raw: %.2f m\r\n",
+			(double)dps.pressure, (double)dps.temperature, (double)dps.altitude);
+
+	if (gps.has_fix) {
+		printf("[gps] FIX sats=%u hdop=%.2f lat=%.6f lon=%.6f alt=%.1f m spd=%.2f m/s cog=%.1f utc=%06lu\r\n",
+				gps.sats_used, gps.hdop, gpsf.lat_deg_f, gpsf.lon_deg_f, gps.alt_m,
+				gpsf.spd_mps_f, gpsf.course_deg_f, (unsigned long)gps.utc_hms);
+	} else {
+		printf("[gps] NO FIX, sats=%u hdop=%.2f\r\n", gps.sats_used, gps.hdop);
+	}
+
+	printf("[fuse] alt_fused=%.2f m  v_z=%.2f m/s\r\n", (double)altkf.x, (double)altkf.v);
+}
+/* ========= END USER FILTERS ========= */
+
 
 void I2C_Scan(I2C_HandleTypeDef *hi2c) {
 	char msg[40];
@@ -170,33 +331,50 @@ int main(void)
 	response = if_icm.vTable->init(&if_icm);
 	if (response != HAL_OK) while(1);
 
+	HAL_GPIO_WritePin(Red_LED_GPIO_Port, Red_LED_Pin, GPIO_PIN_RESET);
+
 	response =if_dps.vTable->init(&if_dps);
+	if (response != HAL_OK) while(1);
+
+	HAL_GPIO_WritePin(Yellow_LED_GPIO_Port, Yellow_LED_Pin, GPIO_PIN_RESET);
+
+	response = if_gps.vTable->probe(&if_gps);
 	if (response != HAL_OK) while(1);
 
 	response =if_gps.vTable->init(&if_gps);
 	if (response != HAL_OK) while(1);
+
+	HAL_GPIO_WritePin(Green_LED_GPIO_Port, Green_LED_Pin, GPIO_PIN_RESET);
+
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
+	uint32_t t_prev = HAL_GetTick();
 	while (1)
 	{
-		HAL_Delay(1000);
-		if_dps.vTable->read(&if_dps);
-		if_icm.vTable->read(&if_icm);
-		if_gps.vTable->read(&if_gps);
+		uint32_t t_now = HAL_GetTick();
+		float dt_s = (t_now - t_prev) * 0.001f;
+		if (dt_s <= 0.0f || dt_s > 1.0f) dt_s = 0.01f; // guard
+		t_prev = t_now;
 
-		printf("ICM temp: %.2f C\r\n", icm.last_temp_c);
-		printf("ICM X Accel (g): %.2f\r\n", (double)icm.accel_g[0]);
-		printf("ICM Y Accel (g): %.2f\r\n", (double)icm.accel_g[1]);
-		printf("ICM Z Accel (g): %.2f\r\n", (double)icm.accel_g[2]);
-		printf("ICM X Rotation (dps): %.2f\r\n", (double)icm.gyro_dps[0]);
-		printf("ICM Y Rotation (dps): %.2f\r\n", (double)icm.gyro_dps[1]);
-		printf("ICM Z Rotation (dps): %.2f\r\n", (double)icm.gyro_dps[2]);
+		// Tuning knobs:
+		const float Q_pos = 0.05f;    // process noise on position, m^2 per step
+		const float Q_vel = 0.5f;     // process noise on velocity
+		const float R_baro = 1.0f;    // baro meas var (m^2)
+		const float R_gps  = 16.0f;   // gps meas var (m^2) ~4 m std^2
 
-		printf("DPS Pressure: %.2f\r\n", (double)dps.pressure);
-		printf("DPS Temperature: %.2f\r\n", (double)dps.temperature);
-		printf("DPS Altitude: %.2f\r\n", (double)dps.altitude);
+		const float EMA_LATLON = 0.15f; // 0..1, higher = less smoothing
+		const float EMA_SPD    = 0.25f;
+
+		float alt_fused = 0.0f;
+		sensors_step(dt_s, Q_pos, Q_vel, R_baro, R_gps, EMA_LATLON, EMA_SPD, &alt_fused);
+
+		// Example: light heartbeat and 10 Hz loop
+		HAL_GPIO_TogglePin(Green_LED_GPIO_Port, Green_LED_Pin);
+		HAL_Delay(100);
+
+
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
@@ -393,7 +571,9 @@ static void MX_USART3_UART_Init(void)
 		Error_Handler();
 	}
 	/* USER CODE BEGIN USART3_Init 2 */
-
+	extern void retarget_init(UART_HandleTypeDef *huart);
+	retarget_init(&huart3);
+	printf("boot ok\n");
 	/* USER CODE END USART3_Init 2 */
 
 }
@@ -423,7 +603,8 @@ static void MX_USART6_UART_Init(void)
 	huart6.Init.OverSampling = UART_OVERSAMPLING_16;
 	huart6.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
 	huart6.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-	huart6.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+	huart6.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_DMADISABLEONERROR_INIT;
+	huart6.AdvancedInit.DMADisableonRxError = UART_ADVFEATURE_DMA_DISABLEONRXERROR;
 	if (HAL_UART_Init(&huart6) != HAL_OK)
 	{
 		Error_Handler();
