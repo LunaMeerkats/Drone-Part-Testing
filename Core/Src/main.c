@@ -180,10 +180,12 @@ static void sensors_step(float dt_s,
 
 	if (HAL_GetTick() - gps.last_update_ms > 150) {
 		uint32_t t_end = HAL_GetTick() + 60;         // ~60 ms budget
+
 		do {
 			if_gps.vTable->read(&if_gps);
 			if (HAL_GetTick() - gps.last_update_ms <= 50) break; // fresh enough
 		} while ((int32_t)(HAL_GetTick() - t_end) < 0);
+
 	} else {
 		// still give it a light read so we don't fall behind
 		if_gps.vTable->read(&if_gps);
